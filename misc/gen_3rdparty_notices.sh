@@ -19,6 +19,7 @@ libuv ./addons/godot_xterm/native/thirdparty/LICENSE_libuv-full
 node-pty ./addons/godot_xterm/native/src/LICENSE_node-pty
 tmux ./addons/godot_xterm/native/src/LICENSE_tmux
 wcwidth ./addons/godot_xterm/native/thirdparty/libtsm/external/wcwidth/LICENSE.txt
+unicode-data ./addons/godot_xterm/native/unicode/LICENSE_unicode.txt
 END
 )
 

@@ -28,8 +28,9 @@ env.Append(CPPPATH=[
 
 sources = Glob("src/*.cpp", exclude=["src/pty*.cpp"] if disable_pty else [])
 sources += Glob("thirdparty/libtsm/src/tsm/*.c")
+# unicode/tsm_wcwidth.c replaces libtsm's Unicode 9 wcwidth table (see misc/gen_wcwidth.py).
 sources.append([
-    'thirdparty/libtsm/external/wcwidth/wcwidth.c',
+    'unicode/tsm_wcwidth.c',
     'thirdparty/libtsm/src/shared/shl-htable.c',
 ])
 
