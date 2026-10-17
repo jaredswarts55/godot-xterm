@@ -1,10 +1,12 @@
 // SPDX-FileCopyrightText: 2021, 2023-2024 Leroy Hopson <godot-xterm@leroy.nix.nz>
 // SPDX-License-Identifier: MIT
 
+#ifndef GODOT_XTERM_DISABLE_PTY
 #include "pty.h"
+#include <uv.h>
+#endif
 #include "terminal.h"
 
-#include <uv.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
 
 using namespace godot;
@@ -281,6 +283,7 @@ const Terminal::KeyMap Terminal::KEY_MAP = {
     { { KEY_F35, '\0' }, XKB_KEY_F35 },
 };
 
+#ifndef GODOT_XTERM_DISABLE_PTY
 Error PTY::uv_err_to_godot_err(const int uv_err) {
     if (uv_err >= 0)
         return OK;
@@ -408,3 +411,4 @@ Error PTY::uv_err_to_godot_err(const int uv_err) {
             return FAILED; // Generic fail error
     }
 }
+#endif

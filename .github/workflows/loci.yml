@@ -1,0 +1,187 @@
+name: "loci: build, test, release"
+
+on:
+  push:
+    branches: [loci]
+    tags: ["v*-loci*"]
+  pull_request:
+    branches: [loci]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  GODOT_VERSION: "4.7.2-stable"
+  SCONS_VERSION: "4.11.1"
+
+jobs:
+  build:
+    name: Build (${{ matrix.platform }}, ${{ matrix.arch }}, ${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [debug, release]
+        platform: [linux, macos]
+        include:
+          - platform: linux
+            arch: x86_64
+            os: ubuntu-22.04
+          - platform: macos
+            arch: universal
+            os: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out godot-cpp and libtsm
+        run: git submodule update --init --depth 1 addons/godot_xterm/native/thirdparty/godot-cpp addons/godot_xterm/native/thirdparty/libtsm
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install SCons
+        run: python -m pip install "scons==${SCONS_VERSION}"
+      - name: Cache SCons objects
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .scons-cache
+          key: scons-${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.target }}-${{ hashFiles('.gitmodules', 'addons/godot_xterm/native/SConstruct') }}-${{ github.sha }}
+          restore-keys: scons-${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.target }}-${{ hashFiles('.gitmodules', 'addons/godot_xterm/native/SConstruct') }}-
+      - name: Build libgodot-xterm
+        working-directory: addons/godot_xterm/native
+        env:
+          SCONS_CACHE: ${{ github.workspace }}/.scons-cache
+        run: scons platform=${{ matrix.platform }} arch=${{ matrix.arch }} target=template_${{ matrix.target }} disable_pty=yes -j4
+      - name: Check the library has no libuv code
+        if: matrix.platform == 'linux'
+        run: |
+          so=addons/godot_xterm/lib/libgodot-xterm.linux.template_${{ matrix.target }}.x86_64.so
+          if nm -D "$so" | grep -q ' uv_'; then echo "libuv symbols found" >&2; exit 1; fi
+          ldd "$so"
+      - name: Show macOS slices
+        if: matrix.platform == 'macos'
+        run: lipo -info addons/godot_xterm/lib/libgodot-xterm.macos.template_${{ matrix.target }}.framework/libgodot-xterm.macos.template_${{ matrix.target }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lib-${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.target }}
+          path: |
+            addons/godot_xterm/lib/*.so
+            addons/godot_xterm/lib/*.framework
+          if-no-files-found: error
+
+  test:
+    name: Test (${{ matrix.platform }}, Godot 4.7.2)
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            os: ubuntu-22.04
+            arch: x86_64
+            godot_zip: Godot_v4.7.2-stable_linux.x86_64.zip
+            godot_sha512: 9aa00f7a605200940bce3027a567b782f49bd8e940dd06ae9e987bd65aee1b1467edd56ed84fcdcbdd44354bf613bdbb4e5d2913e925850368e150c59ed54c65
+            godot_bin: Godot_v4.7.2-stable_linux.x86_64
+          - platform: macos
+            os: macos-15
+            arch: universal
+            godot_zip: Godot_v4.7.2-stable_macos.universal.zip
+            godot_sha512: 38aa16e5bba2083941fc5b3e54be0089bd4cc35e32415f5b9fd9a8a6a7b9818255d44532ea8ef94b5aef56c4b407c2d634fa4f657e4ebe681ebbf59b7bac69ca
+            godot_bin: Godot.app/Contents/MacOS/Godot
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Godot
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/godot"
+          cd "$RUNNER_TEMP/godot"
+          curl -fsSLO "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/${{ matrix.godot_zip }}"
+          echo "${{ matrix.godot_sha512 }}  ${{ matrix.godot_zip }}" | shasum -a 512 -c -
+          unzip -q "${{ matrix.godot_zip }}"
+          echo "GODOT=$RUNNER_TEMP/godot/${{ matrix.godot_bin }}" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: lib-${{ matrix.platform }}-${{ matrix.arch }}-*
+          path: addons/godot_xterm/lib
+          merge-multiple: true
+      - name: Install test dependencies
+        run: |
+          "$GODOT" --headless -s plug.gd install
+          "$GODOT" --headless --editor --quit-after 100 || true
+      - name: Unit and integration tests (headless)
+        shell: bash
+        run: |
+          set -o pipefail
+          "$GODOT" --headless -s addons/gut/gut_cmdln.gd -gconfig=.gutconfig.nopty.json -gjunit_xml_file=res://test/results-${{ matrix.platform }}.xml | tee output.log
+          if grep -q -e 'SCRIPT ERROR:' -e '\[ERROR\]:' -e 'Can.t open dynamic library' -e 'GDExtension dynamic library not found' output.log; then exit 1; fi
+          grep -q 'All tests passed' output.log
+      - name: Visual tests (Xvfb, OpenGL)
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -o pipefail
+          xvfb-run -a -s '-screen 0 1280x720x24' "$GODOT" --rendering-driver opengl3 --windowed --resolution 400x200 --position 0,0 \
+            -s addons/gut/gut_cmdln.gd -gconfig=.gutconfig.visual.json -gjunit_xml_file=res://test/results-visual.xml | tee visual.log
+          if grep -q -e 'SCRIPT ERROR:' -e '\[ERROR\]:' visual.log; then exit 1; fi
+          grep -q 'All tests passed' visual.log
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: test-results-${{ matrix.platform }}
+          path: |
+            test/results-*.xml
+            test/visual/screenshots
+            *.log
+
+  package:
+    name: Package
+    needs: [build, test]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: lib-*
+          path: addons/godot_xterm/lib
+          merge-multiple: true
+      - name: Package addon
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            version="$GITHUB_REF_NAME"
+          else
+            version="$(git describe --tags --always)-${GITHUB_SHA::7}"
+          fi
+          chmod +x addons/godot_xterm/lib/*.framework/*
+          misc/package_nopty.sh "$version" dist
+          unzip -l dist/*.zip
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: godot-xterm-nopty
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-loci')
+    needs: package
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: godot-xterm-nopty
+          path: dist
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --notes "godot-xterm built with disable_pty=yes for Linux x86_64 and macOS universal (debug and release). Tested with Godot ${GODOT_VERSION}. Commit ${GITHUB_SHA}."

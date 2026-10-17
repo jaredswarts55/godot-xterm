@@ -1,0 +1,8 @@
+{
+  "tests": [
+    "res://test/unit/test_terminal.gd",
+    "res://test/integration/test_terminal.gd"
+  ],
+  "log_level": 2,
+  "should_exit": true
+}

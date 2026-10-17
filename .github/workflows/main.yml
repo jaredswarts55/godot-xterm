@@ -1,10 +1,9 @@
 name: "Build and Test"
 
+# The loci branch builds and releases with loci.yml. This upstream workflow
+# runs only on demand so the fork does not build every platform on each push.
 on:
-  push:
-  pull_request:
-  schedule: # Build and test daily.
-    - cron: 0 11 * * *
+  workflow_dispatch:
 
 jobs:
   build-linux:
