@@ -72,6 +72,24 @@ jobs:
             addons/godot_xterm/lib/*.framework
           if-no-files-found: error
 
+  unicode-width:
+    name: Unicode width table
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out libtsm
+        run: git submodule update --init --depth 1 addons/godot_xterm/native/thirdparty/libtsm
+      - name: Check the generated table matches the Unicode data files
+        run: python3 -I misc/gen_wcwidth.py --check
+      - name: Width tests (C)
+        run: |
+          cc -std=c99 -Wall -Wextra -Werror \
+            -I addons/godot_xterm/native/thirdparty/libtsm/external/wcwidth \
+            addons/godot_xterm/native/unicode/tsm_wcwidth.c \
+            addons/godot_xterm/native/unicode/test_tsm_wcwidth.c \
+            -o "$RUNNER_TEMP/test_tsm_wcwidth"
+          "$RUNNER_TEMP/test_tsm_wcwidth"
+
   test:
     name: Test (${{ matrix.platform }}, Godot 4.7.2)
     needs: build
@@ -139,7 +157,7 @@ jobs:
 
   package:
     name: Package
-    needs: [build, test]
+    needs: [build, test, unicode-width]
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
