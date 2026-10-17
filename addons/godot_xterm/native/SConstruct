@@ -6,8 +6,13 @@
 import os
 import shutil
 
+from SCons.Variables.BoolVariable import _text2bool
+
 env = SConscript("thirdparty/godot-cpp/SConstruct")
 env['ENV'] = os.environ
+
+# Builds the Terminal node only: no PTY node, libuv, node-pty or spawn-helper.
+disable_pty = _text2bool(ARGUMENTS.get('disable_pty', 'no'))
 
 VariantDir('build', 'src', duplicate=0)
 env['OBJPREFIX'] = os.path.join('build', '')
@@ -21,7 +26,8 @@ env.Append(CPPPATH=[
     'thirdparty/libuv/include',
 ])
 
-sources = Glob("src/*.cpp") + Glob("thirdparty/libtsm/src/tsm/*.c")
+sources = Glob("src/*.cpp", exclude=["src/pty*.cpp"] if disable_pty else [])
+sources += Glob("thirdparty/libtsm/src/tsm/*.c")
 sources.append([
     'thirdparty/libtsm/external/wcwidth/wcwidth.c',
     'thirdparty/libtsm/src/shared/shl-htable.c',
@@ -30,7 +36,7 @@ sources.append([
 # Include GDExtension documentation if building for editor or debug template.
 if env["target"] in ["editor", "template_debug"]:
     try:
-        doc_data = env.GodotCPPDocData("src/gen/doc_data.gen.cpp", source=Glob("doc_classes/*.xml"))
+        doc_data = env.GodotCPPDocData("src/gen/doc_data.gen.cpp", source=Glob("doc_classes/*.xml", exclude=["doc_classes/PTY.xml"] if disable_pty else []))
         sources.append(doc_data)
     except AttributeError:
         print("Not including class reference as we're targeting a pre-4.3 baseline.")
@@ -38,7 +44,16 @@ if env["target"] in ["editor", "template_debug"]:
 # Allow overriding libuv build directory to support side-by-side platform builds.
 uv_build_dir = os.environ.get('LIBUV_BUILD_DIR', 'build')
 
-if env['platform'] == 'linux' or env['platform'] == 'macos':
+if disable_pty:
+    env.Append(CPPDEFINES=['GODOT_XTERM_DISABLE_PTY'])
+    if env['platform'] == 'linux':
+        env.Append(LINKFLAGS=['-static-libgcc'])
+        arch = env['arch']
+        env.Append(LINKFLAGS=[f'-Wl,-rpath,$ORIGIN/../lib/{arch}'])
+    elif env['platform'] == 'windows':
+        env.Append(CCFLAGS=["-MT"])
+
+elif env['platform'] == 'linux' or env['platform'] == 'macos':
     env.Append(LIBS=['util', env.File('thirdparty/libuv/' + uv_build_dir + '/libuv.a')])
     if env['platform'] == 'linux':
         env.Append(LIBS=['pthread'])
@@ -68,11 +83,12 @@ if env["platform"] == "macos":
         ),
         source=sources,
     )
-    spawn_helper = env.Program(
-        "../lib/spawn-helper",
-        source="thirdparty/node-pty/src/unix/spawn-helper.cc"
-    )
-    Default(spawn_helper)
+    if not disable_pty:
+        spawn_helper = env.Program(
+            "../lib/spawn-helper",
+            source="thirdparty/node-pty/src/unix/spawn-helper.cc"
+        )
+        Default(spawn_helper)
 else:
     library = env.SharedLibrary(
         "../lib/libgodot-xterm{}{}".format(env["suffix"], env["SHLIBSUFFIX"]),

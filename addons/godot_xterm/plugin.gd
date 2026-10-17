@@ -2,7 +2,8 @@
 extends EditorPlugin
 
 var pty_supported := (
-	OS.get_name() in ["Linux", "FreeBSD", "NetBSD", "OpenBSD", "BSD", "macOS", "Windows"]
+	ClassDB.class_exists("PTY")
+	and OS.get_name() in ["Linux", "FreeBSD", "NetBSD", "OpenBSD", "BSD", "macOS", "Windows"]
 )
 var asciicast_import_plugin
 var xrdb_import_plugin
@@ -20,7 +21,7 @@ func _enter_tree():
 	add_custom_type("Asciicast", "Animation", asciicast_script, null)
 
 	if pty_supported:
-		terminal_panel = preload("./editor_plugins/terminal/terminal_panel.tscn").instantiate()
+		terminal_panel = load("res://addons/godot_xterm/editor_plugins/terminal/terminal_panel.tscn").instantiate()
 		terminal_panel.editor_plugin = self
 		terminal_panel.editor_interface = get_editor_interface()
 		add_control_to_bottom_panel(terminal_panel, "Terminal")

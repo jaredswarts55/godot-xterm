@@ -1,6 +1,8 @@
 #include "register_types.h"
 
+#ifndef GODOT_XTERM_DISABLE_PTY
 #include "pty.h"
+#endif
 #include "terminal.h"
 
 #include <gdextension_interface.h>
@@ -14,7 +16,9 @@ void initialize_godot_xterm_module(ModuleInitializationLevel p_level) {
         return;
     }
 
+#ifndef GODOT_XTERM_DISABLE_PTY
     ClassDB::register_class<PTY>();
+#endif
     ClassDB::register_class<Terminal>();
 }
 
