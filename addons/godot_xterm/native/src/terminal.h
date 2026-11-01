@@ -94,6 +94,8 @@ public:
 
     String write(const Variant data);
 
+    bool is_mouse_tracking() const;
+
     void _gui_input(const Ref<InputEvent>& event) override;
     void _process(double delta) override;
 
@@ -133,6 +135,15 @@ private:
     double bell_cooldown;
     Timer* bell_timer;
     static void _bell_cb(struct tsm_vte* vte, void* data);
+
+    // The mouse tracking mode that the program in the terminal asked for
+    // (DECSET 9, 1000-1003, 1006, 1016). TSM_MOUSE_TRACK_DISABLE when it asked for none.
+    tsm_mouse_track_mode mouse_track_mode = TSM_MOUSE_TRACK_DISABLE;
+    bool mouse_track_pixels = false;
+    // Wheel steps not reported yet, and the wheel button they belong to.
+    double wheel_steps = 0.0;
+    unsigned int wheel_button = 0;
+    static void _mouse_cb(struct tsm_vte* vte, enum tsm_mouse_track_mode track_mode, bool track_pixels, void* data);
 
     static int _draw_cb(struct tsm_screen* con, uint64_t id, const uint32_t* ch, size_t len, unsigned int width, unsigned int posx, unsigned int posy, const struct tsm_screen_attr* attr, tsm_age_t age, void* data);
 
@@ -188,6 +199,7 @@ private:
     void _handle_key_input(Ref<InputEventKey> event);
 
     void _handle_mouse_wheel(Ref<InputEventMouseButton> event);
+    bool _report_mouse(Ref<InputEventMouseButton> event);
 
     bool selecting = false;
     Vector2i selection_last_point;

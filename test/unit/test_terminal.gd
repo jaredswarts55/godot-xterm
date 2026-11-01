@@ -553,3 +553,76 @@ class TestModifierKeys:
 			PackedByteArray([0x1D]),
 			"Ctrl+AltGr+9 should send Ctrl+] (GS) control character"
 		)
+
+
+class TestMouseReporting:
+	extends TerminalTest
+
+	# The modes Claude Code 2.1 sets in its fullscreen view.
+	const CLAUDE_MODES := "\u001b[?1049h\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006h"
+
+	func mouse(button: MouseButton, pressed := true, shift := false, factor := 1.0) -> void:
+		var event := InputEventMouseButton.new()
+		event.button_index = button
+		event.pressed = pressed
+		event.shift_pressed = shift
+		event.factor = factor
+		# Inside cell (2, 1): column 3, row 2 in the xterm report.
+		event.position = subject.get_cell_size() * Vector2(2.5, 1.5)
+		subject._on_gui_input(event)
+
+	func sent() -> Array:
+		var result := []
+		for i in get_signal_emit_count(subject, "data_sent"):
+			result.append(get_signal_parameters(subject, "data_sent", i)[0].get_string_from_utf8())
+		return result
+
+	func test_no_tracking_sends_nothing():
+		mouse(MOUSE_BUTTON_WHEEL_UP)
+		mouse(MOUSE_BUTTON_LEFT)
+		assert_false(subject.is_mouse_tracking())
+		assert_eq(sent(), [])
+
+	func test_claude_modes_turn_tracking_on():
+		subject.write(CLAUDE_MODES)
+		assert_true(subject.is_mouse_tracking())
+
+	func test_wheel_reports_sgr():
+		subject.write(CLAUDE_MODES)
+		mouse(MOUSE_BUTTON_WHEEL_UP)
+		mouse(MOUSE_BUTTON_WHEEL_UP, false)
+		mouse(MOUSE_BUTTON_WHEEL_DOWN)
+		assert_eq(sent(), ["\u001b[<64;3;2M", "\u001b[<65;3;2M"])
+
+	func test_left_click_reports_press_and_release():
+		subject.write(CLAUDE_MODES)
+		mouse(MOUSE_BUTTON_LEFT)
+		mouse(MOUSE_BUTTON_LEFT, false)
+		assert_eq(sent(), ["\u001b[<0;3;2M", "\u001b[<0;3;2m"])
+
+	func test_shift_keeps_the_wheel_in_the_terminal():
+		subject.write(CLAUDE_MODES)
+		mouse(MOUSE_BUTTON_WHEEL_UP, true, true)
+		assert_eq(sent(), [])
+
+	func test_small_wheel_steps_add_up():
+		subject.write(CLAUDE_MODES)
+		mouse(MOUSE_BUTTON_WHEEL_DOWN, true, false, 0.4)
+		mouse(MOUSE_BUTTON_WHEEL_DOWN, true, false, 0.4)
+		assert_eq(sent(), [])
+		mouse(MOUSE_BUTTON_WHEEL_DOWN, true, false, 0.4)
+		assert_eq(sent(), ["\u001b[<65;3;2M"])
+
+	func test_x10_wheel_uses_xterm_codes():
+		subject.write("\u001b[?9h")
+		mouse(MOUSE_BUTTON_WHEEL_UP)
+		# 64 + 32 = "`", column 3 + 32 = "#", row 2 + 32 = '"'.
+		assert_eq(sent(), ["\u001b[M`#\""])
+
+	func test_tracking_off_gives_the_wheel_back():
+		subject.write(CLAUDE_MODES)
+		# SGR off first leaves libtsm's callback mode at 1003.
+		subject.write("\u001b[?1006l\u001b[?1003l\u001b[?1002l\u001b[?1000l")
+		mouse(MOUSE_BUTTON_WHEEL_UP)
+		mouse(MOUSE_BUTTON_LEFT)
+		assert_eq(sent(), [])

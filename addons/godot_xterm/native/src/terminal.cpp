@@ -105,6 +105,7 @@ void Terminal::_bind_methods() {
     ClassDB::bind_method(D_METHOD("write", "data"), &Terminal::write);
     ClassDB::bind_method(D_METHOD("get_cursor_pos"), &Terminal::get_cursor_pos);
     ClassDB::bind_method(D_METHOD("get_cell_size"), &Terminal::get_cell_size);
+    ClassDB::bind_method(D_METHOD("is_mouse_tracking"), &Terminal::is_mouse_tracking);
     ClassDB::bind_method(D_METHOD("_on_frame_post_draw"), &Terminal::_on_frame_post_draw);
     ClassDB::bind_method(D_METHOD("_on_gui_input", "event"), &Terminal::_gui_input);
 }
@@ -139,6 +140,7 @@ Terminal::Terminal() {
         ERR_PRINT("Failed to create tsm vte.");
     }
     tsm_vte_set_bell_cb(vte, &Terminal::_bell_cb, this);
+    tsm_vte_set_mouse_cb(vte, &Terminal::_mouse_cb, this);
     tsm_vte_set_backspace_sends_delete(vte, true);
 
     initialize_input();
@@ -202,6 +204,8 @@ String Terminal::write(const Variant data) {
 
 void Terminal::_gui_input(const Ref<InputEvent>& event) {
     _handle_key_input(event);
+    if (_report_mouse(event))
+        return;
     _handle_selection(event);
     _handle_mouse_wheel(event);
 }
@@ -936,6 +940,92 @@ void Terminal::_handle_key_input(Ref<InputEventKey> event) {
     std::set<Key> tab_arrow_keys = { KEY_LEFT, KEY_UP, KEY_RIGHT, KEY_DOWN, KEY_TAB };
     if (tab_arrow_keys.find(keycode) != tab_arrow_keys.end())
         accept_event();
+}
+
+bool Terminal::is_mouse_tracking() const {
+    return mouse_track_mode != TSM_MOUSE_TRACK_DISABLE;
+}
+
+void Terminal::_mouse_cb(tsm_vte* vte, enum tsm_mouse_track_mode track_mode, bool track_pixels, void* data) {
+    (void)vte;
+    Terminal* term = static_cast<Terminal*>(data);
+    term->mouse_track_mode = track_mode;
+    term->mouse_track_pixels = track_pixels;
+    term->wheel_steps = 0.0;
+}
+
+// Sends a button or wheel event to the program while it tracks the mouse.
+// Returns true if the event was the program's. With Shift held the terminal
+// keeps the event for its scrollback and selection, as in xterm. If libtsm
+// sends nothing (the program turned tracking off in an order that left the
+// callback's mode stale), the terminal keeps the event too.
+bool Terminal::_report_mouse(Ref<InputEventMouseButton> event) {
+    if (!event.is_valid() || mouse_track_mode == TSM_MOUSE_TRACK_DISABLE || event->is_shift_pressed())
+        return false;
+
+    // Wheel buttons are passed as their xterm codes (64, 65): libtsm maps 4 and
+    // 5 to them only in SGR mode, while 64 and 65 are right in every mode.
+    unsigned int button;
+    switch (event->get_button_index()) {
+        case MOUSE_BUTTON_LEFT:
+            button = TSM_MOUSE_BUTTON_LEFT;
+            break;
+        case MOUSE_BUTTON_MIDDLE:
+            button = TSM_MOUSE_BUTTON_MIDDLE;
+            break;
+        case MOUSE_BUTTON_RIGHT:
+            button = TSM_MOUSE_BUTTON_RIGHT;
+            break;
+        case MOUSE_BUTTON_WHEEL_UP:
+            button = 64;
+            break;
+        case MOUSE_BUTTON_WHEEL_DOWN:
+            button = 65;
+            break;
+        default:
+            return false;
+    }
+
+    unsigned char modifiers = 0;
+    if (event->is_alt_pressed())
+        modifiers |= TSM_MOUSE_MODIFIER_META;
+    if (event->is_ctrl_pressed())
+        modifiers |= TSM_MOUSE_MODIFIER_CTRL;
+
+    Vector2 pos = event->get_position();
+    unsigned int pixel_x = (unsigned int)std::max(0.0f, pos.x);
+    unsigned int pixel_y = (unsigned int)std::max(0.0f, pos.y);
+    unsigned int cell_x = 0;
+    unsigned int cell_y = 0;
+    if (cell_size.x > 0 && cell_size.y > 0) {
+        cell_x = std::min((unsigned int)(pixel_x / cell_size.x), cols > 0 ? cols - 1 : 0);
+        cell_y = std::min((unsigned int)(pixel_y / cell_size.y), rows > 0 ? rows - 1 : 0);
+    }
+
+    bool wheel = button == 64 || button == 65;
+    if (!wheel) {
+        unsigned int what = event->is_pressed() ? TSM_MOUSE_EVENT_PRESSED : TSM_MOUSE_EVENT_RELEASED;
+        return tsm_vte_handle_mouse(vte, cell_x, cell_y, pixel_x, pixel_y, button, what, modifiers);
+    }
+
+    // A wheel step is one press; its release is not reported. A trackpad sends
+    // small steps (factor below 1): they add up to one report per whole step.
+    if (!event->is_pressed())
+        return true;
+    if (button != wheel_button) {
+        wheel_button = button;
+        wheel_steps = 0.0;
+    }
+    double factor = event->get_factor();
+    wheel_steps += factor > 0.0 ? factor : 1.0;
+    while (wheel_steps >= 1.0) {
+        wheel_steps -= 1.0;
+        if (!tsm_vte_handle_mouse(vte, cell_x, cell_y, pixel_x, pixel_y, button, TSM_MOUSE_EVENT_PRESSED, modifiers)) {
+            wheel_steps = 0.0;
+            return false;
+        }
+    }
+    return true;
 }
 
 void Terminal::_handle_mouse_wheel(Ref<InputEventMouseButton> event) {
