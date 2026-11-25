@@ -17,6 +17,8 @@ lib=addons/godot_xterm/lib
 REQUIRED=(
 	"$lib/libgodot-xterm.linux.template_debug.x86_64.so"
 	"$lib/libgodot-xterm.linux.template_release.x86_64.so"
+	"$lib/libgodot-xterm.android.template_debug.arm64.so"
+	"$lib/libgodot-xterm.android.template_release.arm64.so"
 	"$lib/libgodot-xterm.macos.template_debug.framework/libgodot-xterm.macos.template_debug"
 	"$lib/libgodot-xterm.macos.template_release.framework/libgodot-xterm.macos.template_release"
 )

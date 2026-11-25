@@ -18,6 +18,7 @@ permissions:
 env:
   GODOT_VERSION: "4.7.2-stable"
   SCONS_VERSION: "4.11.1"
+  ANDROID_NDK_VERSION: "28.2.13676358"
 
 jobs:
   build:
@@ -27,11 +28,16 @@ jobs:
       fail-fast: false
       matrix:
         target: [debug, release]
-        platform: [linux, macos]
+        platform: [linux, macos, android]
         include:
           - platform: linux
             arch: x86_64
             os: ubuntu-22.04
+          - platform: android
+            arch: arm64
+            os: ubuntu-22.04
+            # An empty ANDROID_HOME makes godot-cpp use ANDROID_NDK_ROOT instead of its own NDK version.
+            scons_args: ANDROID_HOME=
           - platform: macos
             arch: universal
             os: macos-15
@@ -50,17 +56,30 @@ jobs:
           path: .scons-cache
           key: scons-${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.target }}-${{ hashFiles('.gitmodules', 'addons/godot_xterm/native/SConstruct') }}-${{ github.sha }}
           restore-keys: scons-${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.target }}-${{ hashFiles('.gitmodules', 'addons/godot_xterm/native/SConstruct') }}-
+      - name: Install the Android NDK
+        if: matrix.platform == 'android'
+        run: |
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --install "ndk;${ANDROID_NDK_VERSION}" > /dev/null
+          echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
       - name: Build libgodot-xterm
         working-directory: addons/godot_xterm/native
         env:
           SCONS_CACHE: ${{ github.workspace }}/.scons-cache
-        run: scons platform=${{ matrix.platform }} arch=${{ matrix.arch }} target=template_${{ matrix.target }} disable_pty=yes -j4
+        run: scons platform=${{ matrix.platform }} arch=${{ matrix.arch }} target=template_${{ matrix.target }} disable_pty=yes ${{ matrix.scons_args }} -j4
       - name: Check the library has no libuv code
         if: matrix.platform == 'linux'
         run: |
           so=addons/godot_xterm/lib/libgodot-xterm.linux.template_${{ matrix.target }}.x86_64.so
           if nm -D "$so" | grep -q ' uv_'; then echo "libuv symbols found" >&2; exit 1; fi
           ldd "$so"
+      - name: Check the Android library
+        if: matrix.platform == 'android'
+        run: |
+          so=addons/godot_xterm/lib/libgodot-xterm.android.template_${{ matrix.target }}.arm64.so
+          readelf="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          "$readelf" -h "$so" | grep -q AArch64
+          if "$readelf" --dyn-syms "$so" | grep -q ' uv_'; then echo "libuv symbols found" >&2; exit 1; fi
+          "$readelf" -d "$so" | grep NEEDED
       - name: Show macOS slices
         if: matrix.platform == 'macos'
         run: lipo -info addons/godot_xterm/lib/libgodot-xterm.macos.template_${{ matrix.target }}.framework/libgodot-xterm.macos.template_${{ matrix.target }}
@@ -202,4 +221,4 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --title "$GITHUB_REF_NAME" \
-            --notes "godot-xterm built with disable_pty=yes for Linux x86_64 and macOS universal (debug and release). Tested with Godot ${GODOT_VERSION}. Commit ${GITHUB_SHA}."
+            --notes "godot-xterm built with disable_pty=yes for Linux x86_64, macOS universal and Android arm64 (debug and release). Tested with Godot ${GODOT_VERSION}. Commit ${GITHUB_SHA}."
